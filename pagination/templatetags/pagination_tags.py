@@ -48,6 +48,14 @@ def do_autopaginate(parser, token):
                 % split[3])
         return AutoPaginateNode(split[1], paginate_by=split[2], orphans=orphans,
             context_var=context_var)
+    elif len(split) == 5:
+        try:
+            orphans = int(split[3])
+        except ValueError:
+            raise template.TemplateSyntaxError(u'Got %s, but expected integer.'
+                % split[3])
+        return AutoPaginateNode(split[1], paginate_by=split[2], orphans=orphans,
+            context_var=context_var, page_var=split[4])
     else:
         raise template.TemplateSyntaxError('%r tag takes one required ' +
             'argument and one optional argument' % split[0])
@@ -70,13 +78,17 @@ class AutoPaginateNode(template.Node):
         list of available pages, or else the application may seem to be buggy.
     """
     def __init__(self, queryset_var, paginate_by=DEFAULT_PAGINATION,
-        orphans=DEFAULT_ORPHANS, context_var=None):
+        orphans=DEFAULT_ORPHANS, context_var=None, page_var=None):
         self.queryset_var = template.Variable(queryset_var)
         if isinstance(paginate_by, int):
             self.paginate_by = paginate_by
         else:
             self.paginate_by = template.Variable(paginate_by)
         self.orphans = orphans
+        if isinstance(page_var, str) or page_var is None:
+            self.page_var = page_var
+        else:
+            self.page_var = template.Variable(page_var)
         self.context_var = context_var
 
     def render(self, context):
@@ -86,9 +98,14 @@ class AutoPaginateNode(template.Node):
             paginate_by = self.paginate_by
         else:
             paginate_by = self.paginate_by.resolve(context)
+        if isinstance(self.page_var, str) or self.page_var is None:
+            page_var = self.page_var
+        else:
+            page_var = self.page_var.resolve(context)
         paginator = Paginator(value, paginate_by, self.orphans)
         try:
-            page_obj = paginator.page(context['request'].page)
+            page = int(context["request"].REQUEST.get(page_var) or context['request'].page)
+            page_obj = paginator.page(page)
         except InvalidPage:
             if INVALID_PAGE_RAISES_404:
                 raise Http404('Invalid page requested.  If DEBUG were set to ' +
@@ -105,7 +122,7 @@ class AutoPaginateNode(template.Node):
         return u''
 
 
-def paginate(context, window=DEFAULT_WINDOW, hashtag=''):
+def paginate(context, page_var=None, window=DEFAULT_WINDOW, hashtag=''):
     """
     Renders the ``pagination/pagination.html`` template, resulting in a
     Digg-like display of the available pages, given the current page.  If there
@@ -204,19 +221,21 @@ def paginate(context, window=DEFAULT_WINDOW, hashtag=''):
             differenced = list(last.difference(current))
             differenced.sort()
             pages.extend(differenced)
+        page_var = page_var or "page"
         to_return = {
             'MEDIA_URL': settings.MEDIA_URL,
             'pages': pages,
             'records': records,
             'page_obj': page_obj,
+            "page_var": page_var,
             'paginator': paginator,
             'hashtag': hashtag,
             'is_paginated': paginator.count > paginator.per_page,
         }
         if 'request' in context:
             getvars = context['request'].GET.copy()
-            if 'page' in getvars:
-                del getvars['page']
+            if page_var in getvars:
+                del getvars[page_var]
             if len(getvars.keys()) > 0:
                 to_return['getvars'] = "&%s" % getvars.urlencode()
             else:
